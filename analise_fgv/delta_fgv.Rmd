@@ -1,0 +1,542 @@
+---
+title: "Análise - Dados pré/pós (FGV)"
+subtitle: '**Coordenação de Pesquisa e Avaliação**'
+author: "Fábio Rocha - fabio.vianna@institutounibanco.org.br"
+output:
+  pdf_document:
+    toc: true
+    number_sections: false
+    includes:
+      in_header: header_iu.tex
+fontfamily: mathpazo
+header-includes:
+- \renewcommand{\contentsname}{Sumário}
+fontsize: 11pt
+---
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(gt)
+
+```
+
+\newpage
+# Introdução
+
+Trata-se de um exercício preliminar exploratório não exaustivo de dados produzidos por participantes de um treinamento ao realizarem uma prova. O exercício apesar de produzido por um analista da Coordenação de Pesquisa e Avaliação (CPA) do Instituto Unibanco, contou com contribuições técnicas de outro analista, Fernando Marques, também da CPA.
+
+Seis conjuntos de dados foram compartilhados.
+
+(1) Desempenho dos usuários nas provas antes e depois (dois conjuntos de dados)
+(2) Marcação em cada alternativa em questão antes e depois (dois conjuntos de dados)
+(3) Pontuação global em cada questão antes e depois  (dois conjuntos de dados)
+
+Por ora, para as perguntas propostas neste exercício, apenas dois bancos foram utilizados, (1) e (2)
+
+O script da análise está disponível em []
+
+# Vizualização das variáveis (pré)
+
+O conjunto de dados (1) contem 9 variáveis (colunas) e 57 observações, como pode ser visto a seguir. Como estamos interessados incialmente apenas no desempenho médio antes e depois do treinamento, varíáveis como nome, desvio padrão e outras não serão consideradas. Abaixo as cinco primeiras observações do conjunto de dados (1) pré.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+pre = read.csv("pre.csv", sep = ";", encoding = "UTF-8")
+pos = read.csv("pos.csv", sep = ";", encoding = "UTF-8")
+
+head(pre,5)
+
+```
+
+# Vizualização das variáveis (pós)
+
+As cinco primeiras observaçõs dos mesmos dados, só que para prova após o treinamento.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+head(pos,5)
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Tratamento inicial e seleção de variáveis
+
+pre_trat = pre %>%
+  select(id_organizacao = ID.Definido.da.Organização,
+         id_usuario = Nome.de.Usuário,
+         nome = Nome,
+         sobre_nome = Sobrenome,
+         pontuacao = Pontuação) %>%
+  mutate(tratamento = 0)
+
+pos_trat = pos %>%
+  select(id_organizacao = ID.Definido.da.Organização,
+         id_usuario = Nome.de.Usuário,
+         nome = Nome,
+         sobre_nome = Sobrenome,
+         pontuacao = Pontuação)%>%
+  mutate(tratamento = 1)
+
+```
+
+# Descritivas da nota (pré)
+
+Em termos gerais o desempenho na prova antes do treinamento apresenta a distribuição da tabela. Note que a menor nota foi 4 pontos e que média e mediana se aproximam. Ou seja, 50% dos participantes performaram com nota 8 ou mais.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+tabela1 <- pre_trat %>%
+  summarise(
+    min = min(pontuacao),
+    media = round(mean(pontuacao),2),
+    Q1 = quantile(pre_trat$pontuacao, probs = 0.25),
+    Q2 = quantile(pre_trat$pontuacao, probs = 0.5),
+    Q3 = quantile(pre_trat$pontuacao, probs = 0.75),
+    
+    max = max(pontuacao),
+    desvio_padrao = round(sd(pontuacao),2)
+  )
+
+tabela1 %>% gt::gt()
+
+```
+
+# Descritivas da nota (pós)
+
+Já após o treinamento a distribuição melhora em todos os parâmentros. A média sobe 0.59, a menor nota não mais é 4 e sim 6 e agora 50% dos participantes obtiveram nota 9 ou mais.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+tabela2 <- pos_trat %>%
+  summarise(
+    min = min(pontuacao),
+    media = round(mean(pontuacao),2),
+    Q1 = quantile(pos_trat$pontuacao, probs = 0.25),
+    Q2 = quantile(pos_trat$pontuacao, probs = 0.5),
+    Q3 = quantile(pos_trat$pontuacao, probs = 0.75),
+    max = max(pontuacao),
+    desvio_padrao = round(sd(pontuacao),2)
+  )
+
+tabela2 %>% gt::gt()
+
+```
+
+```{r, eval=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+
+#juntar tabela 1 e 2
+tabela1_2 = rbind(tabela1, tabela2)
+tabela1_2 %>% gt::gt()
+
+```
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+
+# juntas ambos dados
+pre_pos = rbind(pre_trat, pos_trat)
+
+```
+
+# Teste de média
+
+A fim de verificar se essa média é estatisticamente relevante a um dado nível de significância, produzimos um teste de médias a partir de OLS (que produz o mesmo resultado em um teste t padrão). O resultado é que a melhora de 0.5 pontos é significativa a 1%. Em termos percentuais (mesmo procedimento mas com a variável nota na sua forma logarítimica) indica uma melhora de 7,6% na nota após o treinamento. 
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results='asis'}
+
+teste = lm(pontuacao ~ tratamento, pre_pos)
+teste_log = lm(log(pontuacao) ~ tratamento, pre_pos)
+
+stargazer::stargazer(teste, teste_log,
+                     font.size = 'tiny',
+                     title='Teste de média pré-pós',
+                     header=FALSE)
+
+
+```
+
+```{r, eval=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+
+#Apenas para conferir, o teste t reflete o mesmo resultado que uma regressão de variável binária em que a dependente é a pontuação e a independente 1 após o treinamento e 0 antes do treinamento.
+
+teste_t = t.test(pre_trat$pontuacao, pos_trat$pontuacao)
+teste_t
+
+```
+ 
+# Cruzamento das bases a partir do Id 
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+join_pre_pos <- full_join(pre_trat, pos_trat %>% 
+                            select(id_usuario, pontuacao), by = "id_usuario")
+# perda de 3 observações
+ausencia = sum(is.na(join_pre_pos$pontuacao.y))
+
+```
+
+A partir desse procedimento Dos participantes totais na fase pre treinamento, `r ausencia` não realizaram a prova pós treinamento.
+
+# Delta (variação da nota) dos participantes
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+join_pre_pos = join_pre_pos %>%
+  mutate(delta = pontuacao.y - pontuacao.x) %>%
+  mutate(status = ifelse(pontuacao.x == 10 & pontuacao.y == 10,
+                         "Não tem como melhorar", "Pode melhorar"),
+         evolucao = ifelse(delta < 0, "Piorou", 
+                           ifelse(delta == 0, "Não alterou",
+                                                       "Melhorou")))
+
+```
+
+Ou seja, como já verificado no teste de média, a melhora foi de 0.55 (0.5 em 10). Também foi verificado situação em que o usuário obteve piora no desempenho, vide o valor mínimo -2.
+
+Dito de outro modo, 50% dos usuário variaram de uma nota negativa a uma nota igual a anterior, que é o que está descrito na mediana igual a zero. Mas em contraste, foi registrado situação em que os participantes apresentaram uma melhora de até 6 pontos, como mostra o valor descrito maximo da variável delta.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+summary(join_pre_pos$delta)
+
+```
+
+# Analises da variação antes e depois
+
+Analisando a variável delta, isto é, a melhora ou piora após o treinamento, temos o seguinte:
+
+- 40.3% dos participantes melhoraram
+- 10.5% não melhoraram, mas porque já otiveram nota máxima no teste inicial (portanto mantiveram a pontuação)
+- 28.0% podiam melhorar mas continuar iguais
+- 15.7% pioraram.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+join_pre_pos %>%
+  count(evolucao, status) %>%
+  mutate(`(%)` = round((n/sum(n))*100, 2)) %>%
+  gt()
+
+```
+
+Além disso, abaixo constam as frequências de notas antes e após o treinamento.
+
+## Pré treinamento
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+## frequencia das notas antes
+table(join_pre_pos$pontuacao.x)
+
+```
+
+## Pós treinamento
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+## frequencia das notas após
+table(join_pre_pos$pontuacao.y)
+
+```
+
+
+\newpage
+# Análises das perguntas
+
+## Perguntas a serem respondidas:
+
+- Qual é o percentual médio de acerto por questão, antes e depois da formação? 
+- Qual é o percentual médio de seleção por alternativa de cada questão, antes e depois da formação? 
+- Quais foram os principais movimentos de mudança de alternativa por questão (árvore de probabilidades)?
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# carregamento dos dados
+pergunta_pre = read.csv("pre_detalhe_perg.csv", sep = ";", encoding = "UTF-8")
+pergunta_pos = read.csv("pos_detalhe_perg.csv", sep = ";", encoding = "UTF-8")
+
+```
+
+## Analise das váriveis do conjunto de dados (2)
+
+### Summary do conjunto de dados
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Exploratória rápida de ambos conjuntos de dados
+summary(pergunta_pre)
+summary(pergunta_pos)
+
+```
+
+### Valores únicos em cada variável
+
+Valores unicos em cada variavel, exceto variáveis 5 e 8 por se tratar do texto das questões e respectivas alternativas de "A" a "E". A ideia geral com este procedimento é enteder a varibilidade de cada variável para que seja possível direcionar o tipo de análise que será empreendida para responder as questões.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, }
+
+# Valores unicos em cada variavel, exceto variáveis 5 e 8
+sapply(pergunta_pre[,c(1,2,3,4,6,7,9,10,11,12,13,14,15)], unique)
+
+```
+
+# Formato das perguntas do teste
+
+As questões em possuem a característica de multipla escolha, conforme a lista a seguir das três primeiras questôes do teste.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# atribuir as perguntas (textos) a um vetor
+perguntas = pergunta_pre$Texto.da.P
+respostas = pergunta_pre$Resposta
+
+```
+
+**Três primeiras perguntas:** 
+
+(1) `r perguntas[1]`
+ (a) `r respostas[1]`
+ (b) `r respostas[2]`
+ (b) `r respostas[3]`
+ (d) `r respostas[4]`
+ (e) `r respostas[5]`
+
+(2) `r perguntas[6]`
+ (a) `r respostas[6]`
+ (b) `r respostas[7]`
+ (c) `r respostas[8]`
+ (d) `r respostas[9]`
+ (e) `r respostas[10]`
+
+(3) `r perguntas[11]`
+ (a) `r respostas[11]`
+ (b) `r respostas[12]`
+ (c) `r respostas[13]`
+ (d) `r respostas[14]`
+ (e) `r respostas[15]`
+ 
+# Selecação dos dados pré teste
+ 
+No caso das váriáveis perguntas e respostas trabalharemos com o número ao invés de texto. Recorreremos ao texto apenas quando necessário para analisar algum caso particular.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+############### Pre ##############
+selecao_pergunta_pre = pergunta_pre %>%
+  select(n_perg = `Nº.da.P`,
+         relacao_resposta = `Relação.de.Respostas`,
+         n_resp = `Nº.de.Respostas`,
+         pont_med = `Pontuação.Média`,
+         sd = `Desvio.padrão`,
+         i_disc = `Índice.de.Discriminação`,
+         ponto_bi = `Ponto.Bisserial`)
+
+#substituir "," por "." - variavel pontuação media
+selecao_pergunta_pre$pont_med = gsub(",", ".", selecao_pergunta_pre$pont_med)
+
+# transformar em numerico - variavel pontuação media
+selecao_pergunta_pre$pont_med = as.numeric(selecao_pergunta_pre$pont_med)
+
+
+#substituir "," por "." - variavel ponto bisserial
+selecao_pergunta_pre$ponto_bi = gsub(",", ".", selecao_pergunta_pre$ponto_bi)
+
+# transformar em numerico - variavel ponto bisserial
+selecao_pergunta_pre$ponto_bi = as.numeric(selecao_pergunta_pre$ponto_bi)
+
+############### Pos ##############
+selecao_pergunta_pos = pergunta_pos %>%
+  select(n_perg = `Nº.da.P`,
+         relacao_resposta = `Relação.de.Respostas`,
+         n_resp = `Nº.de.Respostas`,
+         pont_med = `Pontuação.Média`,
+         sd = `Desvio.padrão`,
+         i_disc = `Índice.de.Discriminação`,
+         ponto_bi = `Ponto.Bisserial`)
+
+#substituir "," por "." - variavel pontuação media
+selecao_pergunta_pos$pont_med = gsub(",", ".", selecao_pergunta_pos$pont_med)
+
+# transformar em numerico - variavel pontuação media
+selecao_pergunta_pos$pont_med = as.numeric(selecao_pergunta_pos$pont_med)
+
+
+#substituir "," por "." - variavel ponto bisserial
+selecao_pergunta_pos$ponto_bi = gsub(",", ".", selecao_pergunta_pos$ponto_bi)
+
+# transformar em numerico - variavel ponto bisserial
+selecao_pergunta_pos$ponto_bi = as.numeric(selecao_pergunta_pos$ponto_bi)
+
+```
+
+- **Qual é o percentual médio de acerto por questão, antes e depois da formação?**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Seleção da pontuação média
+tabela_pre_perg = selecao_pergunta_pre %>%
+  slice(c(1,6,11,16,21,26,31,36,41,46)) %>%
+  select(n_perg, pont_med, sd, i_disc, ponto_bi)
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Seleção da pontuação média
+tabela_pos_perg = selecao_pergunta_pos %>%
+  slice(c(1,6,11,16,21,26,31,36,41,46)) %>%
+  select(n_perg, pont_med, sd, i_disc, ponto_bi)
+
+```
+
+Note que 3 perguntas em particular tiveram variação negativa, isto é, em média, os participantes após o treinamento performaram pior nessa questão. Outro destaque nesta análise, diz respeito a pontuação média das questões (antes e depois) 6 e 7. Como apresentaram menor pontuação média, estas parecem indicar maior dificuldade, ja que a pontuação média de ambas é menor e sua variação (delta) é marginal após o treinamento. Além disso o desvio padrão dela também sugere isso, já que ele indica alta variância, portanto maior dispersão (distância) em torno da média.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Juntar tabelas pre e pos uma ao lado da outra
+tabela_pre_pos_perg = full_join(tabela_pre_perg, tabela_pos_perg,  by="n_perg") %>%
+  select(n_perg, pont_med.x, pont_med.y, sd.x, sd.y) %>%
+  mutate(delta = pont_med.y - pont_med.x)
+
+tabela_pre_pos_perg %>%
+  select(n_perg, pont_med.x, pont_med.y, delta, sd.x, sd.y) %>%
+  gt() %>%
+  cols_label(
+    n_perg = "Nº da Pergunta",
+    pont_med.x = "Pont. Média Pré",
+    pont_med.y = "Pont. Média Pós",
+    delta = "Delta",
+    sd.x = "Desvio Pré",
+    sd.y = "Desvio Pós"
+  )
+
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# tabela pre treinamento -  pergunta
+tabela2_pre_perg <- selecao_pergunta_pre %>%
+  select(n_perg, n_resp) %>%
+  mutate(alternativa = rep(c("a", "b", "c", "d", "e"), times = 10))
+
+tabela2_pre_perg <- tabela2_pre_perg %>%
+  group_by(n_perg) %>%
+  mutate(percent_pre = round((n_resp / sum(n_resp))*100,2)) %>%
+  ungroup() 
+
+
+# tabela pos treinamento -  pergunta
+tabela2_pos_perg = selecao_pergunta_pos %>%
+  select(n_perg, n_resp)%>%
+  mutate(alternativa = rep(c("a", "b", "c", "d", "e"), 10)) 
+
+tabela2_pos_perg = tabela2_pos_perg %>%
+  group_by(n_perg) %>%
+  mutate(percent_pos = round((n_resp / sum(n_resp))*100,2)) %>%
+  ungroup() 
+
+# juntar percentuais antes e depois numa mesma tabela
+tabela2_pre_pos_perg = tabela2_pos_perg %>%
+  mutate(percent_pre = tabela2_pre_perg$percent_pre,
+         n_resp_pre = tabela2_pre_perg$n_resp,
+         delta = round(percent_pos - percent_pre,2)) %>%
+  select(n_perg,alternativa, 
+         n_resp_pre, 
+         n_resp_pos = n_resp, 
+         percent_pre, 
+         percent_pos, delta)
+
+```
+
+```{r, eval=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+
+ggplot(tabela2_pre_pos_perg, aes(x=alternativa, y=percent_pre))+
+  geom_col() +
+  geom_label(aes(label=percent_pre), angle=40, size=2.)+
+  facet_wrap(~n_perg, ncol = 5, scales = "free") + 
+  theme_bw()+
+  labs(title = "Proporção de marcação de alternativa por questão",
+       subtitle = "Pré-teste")
+
+```
+
+```{r, eval=FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+
+ggplot(tabela2_pre_pos_perg, aes(x=alternativa, y=percent_pos))+
+  geom_col() +
+  geom_label(aes(label=percent_pos), angle=40, size=2.)+
+  facet_wrap(~n_perg, ncol = 5, scales = "free") + 
+  theme_bw()+
+  labs(title = "Proporção de marcação de alternativa por questão",
+       subtitle = "Pró-teste")
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.height=5, fig.width=8}
+
+tabela2_pre_pos_perg <- tabela2_pre_pos_perg %>%
+  pivot_longer(cols = c(percent_pre, percent_pos),
+               names_to = "prova",
+               values_to = "percentagem")
+
+tabela2_pre_pos_perg$prova[tabela2_pre_pos_perg$prova == "percent_pos"] = "Pós treinamento"
+tabela2_pre_pos_perg$prova[tabela2_pre_pos_perg$prova == "percent_pre"] = "Pré treinamento"
+
+```
+
+As duas questões finais a seguir, se o entedimento estiver correto, podem ser respondidas com os gráficos que se seguem.
+
+\newpage
+- **Qual é o percentual médio de seleção por alternativa de cada questão, antes e depois da formação?**
+
+O que o gráfico a ilustra é a proporção de marcação de cada alternativa antes e após o treinamento. Ou seja, considere a questão 1 (primeiro gráfico da esquerda para direita) barra azul. Ele indica que antes do treinamento, 96.8% dos parcipantes marcaram a letra "a" como alternativa correta. Em contraste, a barra vermelha indica esse mesmo percentual após o treinamento. Note que as principais variações de marcação de alternativas ocorreram na questão número 4, alternativa "b".
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.height=8, fig.width=10}
+
+# Proporção de marcação de alternativa por questão
+
+ggplot(tabela2_pre_pos_perg, aes(x = alternativa, y = percentagem, fill = prova), color=prova) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  geom_text(aes(label = percentagem + 0.5, y = percentagem + 2.5), 
+            color = "black", 
+            size = 3.5, 
+            angle = 90, 
+            position = position_dodge(width = 0.7)) +
+  facet_wrap(~n_perg, ncol = 4) + 
+  theme_bw() +
+  theme(legend.position = 'right',
+    #    legend.title = element_blank(),
+        plot.title = ggplot2::element_text(face = "bold", size = 15),
+        plot.subtitle = ggplot2::element_text(face = "italic"),
+        legend.text = ggplot2::element_text(face = "bold")) +
+  labs(title = "Proporção de marcação de alternativa por questão",
+       subtitle = "Pré-Pós",
+       y = "%", 
+       x = "Alternativa",
+       fill = "Prova") 
+
+```
+
+- **Quais foram os principais movimentos de mudança de alternativa por questão?**
+
+# Gráfico de variação por questão
+
+Aqui o que gráfico evidência é o delta (%), isto é, a variação de marcação das alternativas antes e depois do treinamento. No gráfico 1, por exemplo, tem-se que o percentual de marcaçao total nas letras "a" e "e" caiu após o treinamento, ao passo que "b" e "c" não ocorreram variações e "d" uma variação positiva nas marcações.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.height=8, fig.width=10}
+
+ggplot(tabela2_pre_pos_perg, aes(x = alternativa, y = delta)) +
+  geom_col(
+    fill = ifelse(tabela2_pre_pos_perg$delta < 0, '#F8766D', '#00B0F6')) +
+  geom_label(aes(label = delta), angle = 40, size = 2) +
+  facet_wrap(~n_perg, ncol = 5, scales = "free") + 
+  theme_bw() +
+  labs(title = "Variação de marcação de alternativa por questão",
+       subtitle = "Delta = (%) Pós treinamento - (%) Pré treinamento") +
+  theme(plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(face="italic")) 
+```
