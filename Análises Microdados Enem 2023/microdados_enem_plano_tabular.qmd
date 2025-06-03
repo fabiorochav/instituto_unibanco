@@ -1,0 +1,2526 @@
+---
+title: "Microdados Enem (2023)"
+author: "Fábio Rocha^[Analista de pesquisa - fabio.vianna@institutounibanco.org.br]"
+subtitle: "**Coordenação de Pesquisa e Avaliação (GPI/IU)**"
+format: 
+  pdf:
+    theme: cerulan
+    geometry:
+      - landscape
+      - top=20mm
+      - left=20mm
+      - right=20mm
+    toc: true  # Adiciona o sumário
+    toc-depth: 2  # Nível de profundidade do sumário
+    toc-title: "Sumário"
+    number-sections: true 
+---
+
+# Carregamento de pacotes
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(dplyr)
+library(tidyverse)
+library(readxl)
+library(RColorBrewer)
+library(showtext)
+library(data.table)
+library(gridExtra)
+library(grid)
+library(tidyr)
+library(gt)
+library(geobr)
+library(sf)
+library(openxlsx)
+
+```
+
+# Carregamento dos microdados Enem
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+
+enem_2023 = fread("MICRODADOS_ENEM_2023.csv", sep=";")
+enem_2022 = fread("MICRODADOS_ENEM_2022.csv", sep=";")
+
+```
+
+# Status geral de participação - (2022-2023)
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=9}
+
+tabela_1_2023 = enem_2023 %>%
+  group_by(TP_ST_CONCLUSAO, TP_ESCOLA) %>%  
+  summarise(participantes_2023 = n(), .groups = "drop") %>% 
+  mutate(TP_ST_CONCLUSAO = recode(TP_ST_CONCLUSAO, 
+                                  `1` = "Já concluí o Ensino Médio",
+                                  `2` = "Estou cursando e concluirei o Ensino Médio em 2023",
+                                  `3` = "Estou cursando e concluirei o Ensino Médio após 2023",
+                                  `4` = "Não concluí e não estou cursando o Ensino Médio"),
+         TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada"))
+
+tabela_1_2022 = enem_2022 %>%
+  group_by(TP_ST_CONCLUSAO, TP_ESCOLA) %>%  
+  summarise(participantes_2022 = n(), .groups = "drop") %>% 
+  mutate(TP_ST_CONCLUSAO = recode(TP_ST_CONCLUSAO, 
+                                  `1` = "Já concluí o Ensino Médio",
+                                  `2` = "Estou cursando e concluirei o Ensino Médio em 2023",
+                                  `3` = "Estou cursando e concluirei o Ensino Médio após 2023",
+                                  `4` = "Não concluí e não estou cursando o Ensino Médio"),
+         TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada"))
+
+tabela_1_2022_2023 = tabela_1_2023 %>%
+  left_join(tabela_1_2022, by = c("TP_ST_CONCLUSAO", "TP_ESCOLA")) %>% 
+  mutate(variacao_percentual = (participantes_2023 - participantes_2022) / participantes_2022 * 100) %>%
+  select(TP_ST_CONCLUSAO, TP_ESCOLA, participantes_2022, participantes_2023, variacao_percentual)
+
+tabela_1_2022_2023 %>%
+  gt() %>%
+  fmt_number(columns = c(participantes_2023, participantes_2022), 
+             decimals = 0, 
+             sep_mark = ".") %>%
+  fmt_number(columns = variacao_percentual, 
+             decimals = 2, 
+             sep_mark = ".") %>%
+  cols_label(
+    TP_ST_CONCLUSAO = md("**Status de Conclusão**"),
+    TP_ESCOLA = md("**Tipo de Escola**"),
+    participantes_2023 = md("**Participantes 2023**"),
+    participantes_2022 = md("**Participantes 2022**"),
+    variacao_percentual = md("**Variação (%)**")
+  ) %>%
+  tab_header(
+    title = md("**Variação de Participantes do ENEM (2022-2023)**"))
+
+# Exportar para um arquivo Excel
+write.xlsx(tabela_1_2022_2023, "tabela_participantes_geral.xlsx")
+
+```
+
+# Filtrando apenas privada e publica (2022-2023) - Mapas
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+tabela_2_2023_pv = enem_2023 %>%
+  group_by(SG_UF_PROVA, TP_ESCOLA) %>%  
+  summarise(participantes_2023 = n(), .groups = "drop") %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA %in% c("Pública", "Privada")) 
+
+tabela_2_2022_pv = enem_2022 %>%
+  group_by(SG_UF_PROVA, TP_ESCOLA) %>%  
+  summarise(participantes_2022 = n(), .groups = "drop") %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA %in% c("Pública", "Privada")) 
+
+tabela_2_2022_2023 = tabela_2_2023_pv %>%
+  left_join(tabela_2_2022_pv, by = c("SG_UF_PROVA", "TP_ESCOLA")) %>%
+  mutate(variacao_percentual = (participantes_2023 - participantes_2022) / participantes_2022 * 100)
+
+# Coordenadas geograficas de limite de estado
+mapa_estados <- read_state(year = 2020, showProgress = FALSE)
+
+# Juntas dados mapas com dados tratados
+dados_mapa <- mapa_estados %>%
+  left_join(tabela_2_2022_2023, by = c("abbrev_state" = "SG_UF_PROVA"))
+
+# Adicionar a fonte Ubuntu do Google Fonts
+font_add_google("Ubuntu", "ubuntu")
+showtext_auto()  # Ativar o uso do showtext
+
+# Mapa
+ggplot(dados_mapa) +
+  geom_sf(aes(fill = variacao_percentual), color = "white", size = 0.2) +
+  geom_sf_text(aes(label = round(variacao_percentual, 1)), size = 3, color = "blue", vjust=1, hjust=-0.3) + # Rótulos no mapa
+  scale_fill_gradientn(colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00"),   
+                      # na.value = "#faf0ca", 
+                       guide = guide_colorsteps(barwidth = 1.5), # Corrigido "barwidht" para "barwidth"
+                       labels = scales::label_percent(accuracy = 1, scale = 1)) + # Permite valores negativos
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +  
+  theme(legend.position = "right",
+        plot.title = element_text(face = "bold", size = 20),
+        plot.subtitle = element_text(face = "italic", size = 17),
+        axis.title = element_blank(), # Remove títulos dos eixos
+        axis.text = element_blank(),  # Remove valores dos eixos
+        axis.ticks = element_blank(), # Remove os traços dos eixos
+        plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+        panel.grid = element_blank()) +
+  labs(title = "Variação dos Inscritos do ENEM (2022-2023)",
+       subtitle = "Comparação entre escolas públicas e privadas",
+       caption = "Fonte: INEP / Elaboração: Instituto Unibanco",
+       fill="")
+
+```
+
+# Participação - Números absolutos
+
+```{r, eval=FALSE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=6}
+
+# Organizar os dados para gráfico
+tabela_participante <- tabela_2_2022_2023 %>%
+  pivot_wider(names_from = TP_ESCOLA, values_from = c(participantes_2023, participantes_2022, variacao_percentual)) %>% 
+  select(SG_UF_PROVA, participantes_2022_Pública, participantes_2023_Pública, 
+         variacao_percentual_Pública, participantes_2022_Privada, participantes_2023_Privada, variacao_percentual_Privada)
+
+# Exportar para um arquivo Excel
+write.xlsx(tabela_participante, "tabela_participante.xlsx")
+
+
+```
+
+# Gráfico da estimativa de participação - 2023
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+# Calcular a taxa de participação (presença nas 4 provas) por estado (SG_UF_PROVA) e tipo de escola (TP_ESCOLA)
+ptc_4_provas_2023 <- enem_2023 %>%
+  mutate(
+    # Calcular presença por prova
+    presenca_CN = ifelse(TP_PRESENCA_CN == 1, 1, 0),
+    presenca_CH = ifelse(TP_PRESENCA_CH == 1, 1, 0),
+    presenca_LC = ifelse(TP_PRESENCA_LC == 1, 1, 0),
+    presenca_MT = ifelse(TP_PRESENCA_MT == 1, 1, 0),
+    
+    # Aluno presente nas 4 provas
+    presente_4_provas = ifelse(presenca_CN == 1 & presenca_CH == 1 & presenca_LC == 1 & presenca_MT == 1, 1, 0)) %>%
+  group_by(SG_UF_PROVA, TP_ESCOLA) %>%
+  summarise(
+    # Calcular a taxa de alunos presentes nas 4 provas por estado e tipo de escola
+    taxa_presenca_4_provas_2023 = mean(presente_4_provas, na.rm = TRUE) * 100
+  ) %>%
+  ungroup() %>%
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu")
+
+# Juntas dados de mapa 
+dados_mapa_participacao <- mapa_estados %>%
+  left_join(ptc_4_provas_2023, by = c("abbrev_state" = "SG_UF_PROVA"))
+
+ggplot(dados_mapa_participacao) +
+  geom_sf(aes(fill = taxa_presenca_4_provas_2023), color = "white", size = 0.2) +
+  geom_sf_text(aes(label = round(taxa_presenca_4_provas_2023, 1)), 
+               size = 3, color = "black", vjust = 1, hjust = -0.3) + # Rótulos no mapa
+  scale_fill_gradientn(
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00"),  
+    limits = c(50, 100),  # Define os limites da escala de 0 a 100
+    guide = guide_colorsteps(barwidth = 1.), 
+    labels = scales::label_percent(scale = 1)
+  ) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +  
+  theme(
+    legend.position = "right",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Taxa de presença nas quatro avaliações - 2023",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: INEP / Elaboração: Instituto Unibanco",
+    fill = ""
+  )
+
+# Grafico de barra
+dados_mapa_participacao %>%
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels = c("Pública", "Privada"))) %>%
+  arrange(desc(taxa_presenca_4_provas_2023)) %>%  # Ordena os dados
+  ggplot(aes(x = reorder(abbrev_state, taxa_presenca_4_provas_2023), 
+             y = taxa_presenca_4_provas_2023)) +
+  geom_col(fill = "#2171A2") +  # Define a cor fixa corretamente
+  geom_text(aes(label = round(taxa_presenca_4_provas_2023, 1)), 
+            hjust = 2, size = 3, color = "white") +  # Adiciona os rótulos
+  coord_flip() +  # Rotaciona para facilitar a leitura
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",  # Remove legenda, já que a cor é fixa
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Taxa de presença nas quatro avaliações - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (INEP) / Elaboração: Instituto Unibanco",
+    y = "Taxa de Presença (%)"
+  )
+
+tabela_4_provas_2023 = ptc_4_provas_2023 %>% 
+  pivot_wider(names_from = TP_ESCOLA, values_from = taxa_presenca_4_provas_2023)
+
+```
+
+# Diferença de média geral e quatro provas
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+font_add_google("Ubuntu", "ubuntu")
+showtext_auto() 
+
+ptc_1_dia_2023 <- enem_2023 %>%
+  mutate(TP_ESCOLA = recode_factor(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  mutate(
+    presenca_primeiro_dia = ifelse(TP_PRESENCA_LC == 1 & TP_PRESENCA_CH == 1, 1, 0),
+    presenca_segundo_dia = ifelse(TP_PRESENCA_MT == 1 & TP_PRESENCA_CN == 1, 1, 0),
+    apenas_primeiro_dia = ifelse(presenca_primeiro_dia == 1 & presenca_segundo_dia == 0, 1, 0),
+    apenas_segundo_dia = ifelse(presenca_primeiro_dia == 0 & presenca_segundo_dia == 1, 1, 0),
+    ambos_os_dias = ifelse(presenca_primeiro_dia == 1 & presenca_segundo_dia == 1, 1, 0)
+  ) %>%
+  group_by(SG_UF_PROVA, TP_ESCOLA) %>%
+  summarise(
+    proporcao_apenas_primeiro_dia = mean(apenas_primeiro_dia, na.rm = TRUE) * 100,
+    proporcao_apenas_segundo_dia = mean(apenas_segundo_dia, na.rm = TRUE) * 100,
+    proporcao_ambos_os_dias = mean(ambos_os_dias, na.rm = TRUE) * 100,
+    
+    media_nota_mt_ambos = mean(NU_NOTA_MT[ambos_os_dias == 1], na.rm = TRUE),
+    media_nota_mt_segundo = mean(NU_NOTA_MT[presenca_segundo_dia == 1], na.rm = TRUE), # Média para quem foi apenas no primeiro dia
+    media_geral_mt = mean(NU_NOTA_MT, na.rm = TRUE),
+    
+    media_nota_redac_ambos = mean(NU_NOTA_REDACAO[ambos_os_dias == 1], na.rm = TRUE),
+    media_nota_redac_primeiro = mean(NU_NOTA_REDACAO[apenas_primeiro_dia == 1], na.rm = TRUE), # Média para quem foi apenas no primeiro dia
+    media_geral_redac = mean(NU_NOTA_REDACAO, na.rm = TRUE),
+    media_nota_lc_primeiro = mean(NU_NOTA_LC[apenas_primeiro_dia == 1], na.rm = TRUE), # Média para quem foi apenas no primeiro dia
+    media_geral_lc = mean(NU_NOTA_LC, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+
+
+ptc_1_dia_2023 %>%
+  ggplot(aes(x = reorder(SG_UF_PROVA, proporcao_apenas_primeiro_dia), 
+             y = proporcao_apenas_primeiro_dia)) +
+  geom_col(fill = "#2171A2") +  # Define a cor fixa corretamente
+  geom_text(aes(label = round(proporcao_apenas_primeiro_dia , 1)), 
+            hjust = 2, size = 3, color = "white") +  # Adiciona os rótulos
+  coord_flip() +  # Rotaciona para facilitar a leitura
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",  # Remove legenda, já que a cor é fixa
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Taxa de presença apenas no primeiro dia de prova - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (INEP) / Elaboração: Instituto Unibanco",
+    y = "Taxa de Presença (%)"
+  )
+
+
+ptc_1_dia_2023 <- ptc_1_dia_2023 %>%
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels = c("Pública", "Privada")))
+
+ptc_1_dia_2023 %>%
+  ggplot(aes(x = reorder(SG_UF_PROVA, proporcao_apenas_segundo_dia), 
+             y = proporcao_apenas_segundo_dia)) +
+  geom_col(fill = "#2171A2") +  # Define a cor fixa corretamente
+  geom_text(aes(label = round(proporcao_apenas_segundo_dia, 1)), 
+            hjust = 1.2, size = 3, color = "white") +  # Adiciona os rótulos
+  coord_flip() +  # Rotaciona para facilitar a leitura
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",  # Remove legenda, já que a cor é fixa
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Taxa de presença apenas no segundo dia de prova - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (INEP) / Elaboração: Instituto Unibanco",
+    y = "Taxa de Presença (%)"
+  )
+
+
+```
+
+# Comparações MATEMÁTICA
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=7}
+
+# Transformando o dataframe para formato longo
+ptc_1_dia_2023_long <- ptc_1_dia_2023 %>%
+  pivot_longer(cols = c(media_geral_mt, media_nota_mt_ambos),
+               names_to = "categoria",
+               values_to = "media") 
+
+# Gerar gráfico comparando as médias
+ggplot(ptc_1_dia_2023_long, aes(x = SG_UF_PROVA, y = media, fill = categoria)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ TP_ESCOLA) +
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "right",  # Remove legenda, já que a cor é fixa
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Comparação entre as Médias de Nota de Matemática",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (INEP) / Elaboração: Instituto Unibanco",
+    x = "Estado",
+    y = "Média",
+    fill = "Categoria"
+  ) +
+  coord_flip()+
+  scale_fill_manual(values = c("media_nota_mt_ambos" = "#2171A2", "media_geral_mt" = "orange"))
+
+
+
+```
+# Comparações REDAÇÃO
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=7}
+
+# Transformando o dataframe para formato longo
+ptc_1_dia_2023_long <- ptc_1_dia_2023 %>%
+  pivot_longer(cols = c(media_geral_redac, media_nota_redac_ambos),
+               names_to = "categoria",
+               values_to = "media") 
+
+# Gerar gráfico comparando as médias
+ggplot(ptc_1_dia_2023_long, aes(x = SG_UF_PROVA, y = media, fill = categoria)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ TP_ESCOLA) +
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "right",  # Remove legenda, já que a cor é fixa
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Comparação entre as Médias de Nota de Redação",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (INEP) / Elaboração: Instituto Unibanco",
+    x = "Estado",
+    y = "Média",
+    fill = "Categoria"
+  ) +
+  coord_flip()+
+  scale_fill_manual(
+    values = c("media_nota_redac_ambos" = "#2171A2", "media_geral_redac" = "orange"),
+    labels = c("media_nota_redac_ambos" = "Média Redação (Ambos os Dias)", 
+               "media_geral_redac" = "Média Geral de Redação")
+  )
+
+
+ptc_1_dia_2023_long <- ptc_1_dia_2023 %>%
+  pivot_longer(cols = c(media_nota_mt_segundo, media_nota_mt_ambos),
+               names_to = "categoria",
+               values_to = "media") 
+
+# Gerar gráfico comparando as médias
+ggplot(ptc_1_dia_2023_long, aes(x = SG_UF_PROVA, y = media, fill = categoria)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "right",  # Remove legenda, já que a cor é fixa
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Comparação de médias de redação",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (INEP) / Elaboração: Instituto Unibanco",
+    x = "Estado",
+    y = "Média",
+    fill = "Categoria"
+  ) +
+  coord_flip() +
+  scale_fill_manual(values = c("media_nota_mt_ambos" = "#2171A2", "media_nota_mt_segundo" = "orange")) +
+  geom_text(aes(label = round(media, 1)), position = position_dodge(width = 0.8), vjust = 0.1, size = 2.5)
+
+
+ptc_1_dia_2023_long <- ptc_1_dia_2023 %>%
+  pivot_longer(cols = c(media_nota_lc_primeiro, media_geral_lc),
+               names_to = "categoria",
+               values_to = "media") 
+
+# Gerar gráfico comparando as médias
+ggplot(ptc_1_dia_2023_long, aes(x = SG_UF_PROVA, y = media, fill = categoria)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "right",  # Remove legenda, já que a cor é fixa
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Comparação de médias de Nota de Linguagens (LP)",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (INEP) / Elaboração: Instituto Unibanco",
+    x = "Estado",
+    y = "Média",
+    fill = "Categoria"
+  ) +
+  coord_flip() +
+  scale_fill_manual(values = c("media_geral_lc" = "#2171A2", "media_nota_lc_primeiro" = "orange")) +
+  geom_text(aes(label = round(media, 1)), position = position_dodge(width = 0.8), vjust = 0.1, size = 2.5)
+
+
+# Redação - presente apenas um dia e ambos
+# Transformando o dataframe para formato longo
+ptc_1_dia_2023_long <- ptc_1_dia_2023 %>%
+  pivot_longer(cols = c(media_nota_redac_primeiro, media_nota_redac_ambos),
+               names_to = "categoria",
+               values_to = "media") 
+
+# Gerar gráfico comparando as médias
+ggplot(ptc_1_dia_2023_long, aes(x = SG_UF_PROVA, y = media, fill = categoria)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 1.)) +
+  geom_text(aes(label = round(media, 1)), 
+            position = position_dodge(width = 1.), 
+            vjust = 0.4,
+            hjust = -.1,
+            size = 2.5) +  # Ajuste o tamanho conforme necessário
+  facet_wrap(~ TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  ylim(0,1000)+
+  labs(
+    title = "Comparação entre as médias de redação",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (INEP) / Elaboração: Instituto Unibanco",
+    x = "Estado",
+    y = "Média",
+    fill = "Média"
+  ) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c("media_nota_redac_primeiro" = "orange", 
+               "media_nota_redac_ambos" = "#2171A2"),
+    labels = c("media_nota_redac_primeiro" = "Apenas 1º Dia", 
+               "media_nota_redac_ambos" = "Ambos os Dias")
+  )
+
+```
+
+# Gráfico da estimativa de participação - 2022
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+# Calcular a taxa de participação (presença nas 4 provas) por estado (SG_UF_PROVA) e tipo de escola (TP_ESCOLA)
+pct_4_provas_2022 <- enem_2022 %>%
+  mutate(
+    # Calcular presença por prova
+    presenca_CN = ifelse(TP_PRESENCA_CN == 1, 1, 0),
+    presenca_CH = ifelse(TP_PRESENCA_CH == 1, 1, 0),
+    presenca_LC = ifelse(TP_PRESENCA_LC == 1, 1, 0),
+    presenca_MT = ifelse(TP_PRESENCA_MT == 1, 1, 0),
+    
+    # Aluno presente nas 4 provas
+    presente_4_provas = ifelse(presenca_CN == 1 & presenca_CH == 1 & presenca_LC == 1 & presenca_MT == 1, 1, 0)
+  ) %>%
+  group_by(SG_UF_PROVA, TP_ESCOLA) %>%
+  summarise(
+    # Calcular a taxa de alunos presentes nas 4 provas por estado e tipo de escola
+    taxa_presenca_4_provas_2022 = mean(presente_4_provas, na.rm = TRUE) * 100
+  ) %>%
+  ungroup() %>%
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu")
+
+# Juntas dados de mapa 
+dados_mapa_participacao <- mapa_estados %>%
+  left_join(pct_4_provas_2022, by = c("abbrev_state" = "SG_UF_PROVA"))
+
+ggplot(dados_mapa_participacao) +
+  geom_sf(aes(fill = taxa_presenca_4_provas_2022), color = "white", size = 0.2) +
+  geom_sf_text(aes(label = round(taxa_presenca_4_provas_2022, 1)), size = 3, color = "black", vjust = 1, hjust = -0.3) + # Rótulos no mapa
+  scale_fill_gradientn(
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00"),  
+    limits = c(50, 100),  # Define os limites da escala de 0 a 100
+    guide = guide_colorsteps(barwidth = 1.), 
+    labels = scales::label_percent(scale = 1)
+  ) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +  
+  theme(
+    legend.position = "right",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Taxa de presença nas quatro avaliações - 2022",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: INEP / Elaboração: Instituto Unibanco",
+    fill = ""
+  )
+
+
+# Gráfico de barra
+dados_mapa_participacao %>%
+  arrange(desc(taxa_presenca_4_provas_2022)) %>%  # Ordena os dados
+  ggplot(aes(x = reorder(abbrev_state, taxa_presenca_4_provas_2022), 
+             y = taxa_presenca_4_provas_2022)) +
+  geom_col(fill = "#2171A2") +  # Define a cor fixa corretamente
+  geom_text(aes(label = round(taxa_presenca_4_provas_2022, 1)), 
+            hjust = 2, size = 3, color = "white") +  # Adiciona os rótulos
+  coord_flip() +  # Rotaciona para facilitar a leitura
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",  # Remove legenda, já que a cor é fixa
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Taxa de presença nas quatro avaliações - 2022",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2022'",
+    caption = "Fonte: INEP / Elaboração: Instituto Unibanco",
+    y = "Taxa de Presença (%)"
+  )
+
+```
+
+# Variação da participação - presença nas quatro provas
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+var_presenca = ptc_4_provas_2023 %>%
+  left_join(pct_4_provas_2022, by = c("SG_UF_PROVA", "TP_ESCOLA")) %>%
+  mutate(variacao_percentual = taxa_presenca_4_provas_2023 - taxa_presenca_4_provas_2022)
+
+# Coordenadas geograficas de limite de estado
+mapa_estados <- read_state(year = 2020, showProgress = FALSE)
+
+# Juntas dados mapas com dados tratados
+dados_mapa <- mapa_estados %>%
+  left_join(var_presenca, by = c("abbrev_state" = "SG_UF_PROVA"))
+
+# Mapa
+ggplot(dados_mapa) +
+  geom_sf(aes(fill = variacao_percentual), color = "white", size = 0.2) +
+  geom_sf_text(aes(label = round(variacao_percentual, 1)), size = 3, color = "blue", vjust=1, hjust=-0.3) + # Rótulos no mapa
+  scale_fill_gradientn(colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00"),   
+                       na.value = "white", 
+                       guide = guide_colorsteps(barwidth = 1.5), # Corrigido "barwidht" para "barwidth"
+                       labels = scales::label_percent(accuracy = 1, scale = 1)) + # Permite valores negativos
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +  
+  theme(legend.position = "right",
+        plot.title = element_text(face = "bold", size = 20),
+        plot.subtitle = element_text(face = "italic", size = 17),
+        axis.title = element_blank(), # Remove títulos dos eixos
+        axis.text = element_blank(),  # Remove valores dos eixos
+        axis.ticks = element_blank(), # Remove os traços dos eixos
+        plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+        panel.grid = element_blank()) +
+  labs(title = "Variação de presença nas quatro provas (2022-2023)",
+       subtitle = "Comparação entre escolas públicas e privadas",
+       caption = "Fonte: INEP / Elaboração: Instituto Unibanco",
+       fill="")
+
+
+# Gráfico
+dados_mapa %>%
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels = c("Pública", "Privada"))) %>% 
+  arrange(desc(variacao_percentual)) %>%  # Ordena os dados
+  ggplot(aes(x = reorder(abbrev_state, variacao_percentual), 
+             y = variacao_percentual, 
+             fill = variacao_percentual >= 0)) +  # Define a cor com base no valor
+  geom_col() +  
+  geom_text(aes(label = round(variacao_percentual, 1)), 
+            hjust = -0.3, size = 3, color = "black") +  # Adiciona os rótulos
+  ylim(-5, 10) +  
+  coord_flip() +  # Rotaciona para facilitar a leitura
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Ajusta cores
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",  # Remove legenda, já que a cor é fixa
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 17),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Variação de presença nas quatro provas (2022-2023)",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2022-2023'",
+    caption = "Fonte: Microdados Enem - INEP | Elaboração: Instituto Unibanco",
+    y = "Variação da taxa de presença (%)"
+  )
+
+```
+
+# Status de redação - pública
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=6}
+
+status_redacao_publica  = enem_2023 %>%
+  mutate(TP_ST_CONCLUSAO = recode(TP_ST_CONCLUSAO, 
+                                  `1` = "Já concluí o EM",
+                                  `2` = "cursando e concluirei o EM em 2023",
+                                  `3` = "cursando e concluirei o EM após 2023",
+                                  `4` = "Não concluí e não estou cursando o EM"),
+         TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada"),
+         TP_STATUS_REDACAO = recode(TP_STATUS_REDACAO,
+                                    `1` = "Sem problemas",
+                                    `2` = "Anulada",
+                                    `3` = "Cópia Texto Motivador",
+                                    `4` = "Em branco",
+                                    `6` = "Fuga ao tema",
+                                    `7` = "Não atendimento ao tipo textual",
+                                    `8` = "Texto Insuficiente",
+                                    `9` = "Parte desconectada")) %>%  
+  group_by(SG_UF_PROVA, TP_ST_CONCLUSAO, TP_ESCOLA, TP_STATUS_REDACAO) %>%  
+  summarise(n_redacao = n(),
+            media_redacao = mean(NU_NOTA_REDACAO, na.rm = TRUE),
+            n_maior_igual_980 = sum(NU_NOTA_REDACAO >= 980, na.rm=TRUE),
+            n_950_980 = sum(NU_NOTA_REDACAO >= 950 & NU_NOTA_REDACAO < 980, na.rm=TRUE),
+            n_950_menor = sum(NU_NOTA_REDACAO < 950, na.rm=TRUE))
+
+status_redacao_publica = data.frame(status_redacao_publica)
+  
+status_redacao_publica %>% 
+  filter(TP_ST_CONCLUSAO == "cursando e concluirei o EM em 2023") %>% 
+  select(SG_UF_PROVA, TP_ESCOLA, TP_STATUS_REDACAO, n_redacao) %>% 
+  pivot_wider(names_from = TP_STATUS_REDACAO, values_from = n_redacao) %>% 
+  filter(TP_ESCOLA == "Pública") %>% 
+  select(-TP_ESCOLA) %>% 
+  writexl::write_xlsx("status_redacao_publica.xlsx")
+  
+```
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=6}
+
+
+# Status de redação - privada
+status_redacao_privada  = enem_2023 %>%
+  mutate(TP_ST_CONCLUSAO = recode(TP_ST_CONCLUSAO, 
+                                  `1` = "Já concluí o EM",
+                                  `2` = "cursando e concluirei o EM em 2023",
+                                  `3` = "cursando e concluirei o EM após 2023",
+                                  `4` = "Não concluí e não estou cursando o EM"),
+         TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada"),
+         TP_STATUS_REDACAO = recode(TP_STATUS_REDACAO,
+                                    `1` = "Sem problemas",
+                                    `2` = "Anulada",
+                                    `3` = "Cópia Texto Motivador",
+                                    `4` = "Em branco",
+                                    `6` = "Fuga ao tema",
+                                    `7` = "Não atendimento ao tipo textual",
+                                    `8` = "Texto Insuficiente",
+                                    `9` = "Parte desconectada")) %>%  
+  group_by(SG_UF_PROVA, TP_ST_CONCLUSAO, TP_ESCOLA, TP_STATUS_REDACAO) %>%  
+  summarise(n_redacao = n(),
+            media_redacao = mean(NU_NOTA_REDACAO, na.rm = TRUE),
+            n_maior_igual_980 = sum(NU_NOTA_REDACAO >= 980, na.rm=TRUE),
+            n_950_980 = sum(NU_NOTA_REDACAO >= 950 & NU_NOTA_REDACAO < 980, na.rm=TRUE),
+            n_950_menor = sum(NU_NOTA_REDACAO < 950, na.rm=TRUE))
+
+status_redacao_privada = data.frame(status_redacao_privada)
+  
+status_redacao_privada %>% 
+  filter(TP_ST_CONCLUSAO == "cursando e concluirei o EM em 2023") %>% 
+  select(SG_UF_PROVA, TP_ESCOLA, TP_STATUS_REDACAO, n_redacao) %>% 
+  pivot_wider(names_from = TP_STATUS_REDACAO, values_from = n_redacao) %>% 
+  filter(TP_ESCOLA == "Privada") %>% 
+  select(-TP_ESCOLA) %>% 
+  writexl::write_xlsx("status_redacao_privada.xlsx")
+  
+
+```
+
+# Boxplot - Matemática
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=13, fig.height=5}
+
+mediana_mat = median(enem_2023$NU_NOTA_MT, na.rm=TRUE)
+
+enem_2023 %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels = c("Pública", "Privada"))) %>%
+  drop_na(NU_NOTA_MT) %>% 
+  ggplot(aes(x = reorder(SG_UF_PROVA, NU_NOTA_MT, FUN=median))) +
+  geom_boxplot(aes(y=NU_NOTA_MT), fill = "#e79786", 
+               color = "black", 
+               outlier.color = "green3", 
+               outlier.shape = 16) +
+  geom_hline(yintercept = mediana_mat, linetype = "dashed", color="blue", size=1) +
+  geom_hline(yintercept = 1000, color="#c31208") +
+  facet_wrap(~TP_ESCOLA) +
+  theme_bw() +
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()) + # Remove o fundo cinza da legenda
+  labs(
+    title = "Boxplot matemática - 2023",
+    subtitle = paste0("Comparação entre escolas públicas e privadas - linha pontilhada azul = mediana: ",mediana_mat),
+    caption = "Fonte: Microdados Enem (INEP) / Elaboração: Instituto Unibanco",
+    fill = "",
+    x="",
+    y="") +
+  scale_y_continuous(breaks = scales::breaks_extended(n = 10)(c(0, 1000, mediana_mat)))
+
+mediana_mat = median(enem_2022$NU_NOTA_MT, na.rm=TRUE)
+
+enem_2022 %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  drop_na(NU_NOTA_MT) %>% 
+  ggplot(aes(x = reorder(SG_UF_PROVA, NU_NOTA_MT, FUN=median))) +
+  geom_boxplot(aes(y=NU_NOTA_MT), fill = "#e79786", 
+               color = "black", 
+               outlier.color = "green3", 
+               outlier.shape = 16) +
+  geom_hline(yintercept = mediana_mat, linetype = "dashed", color="blue", size=1) +
+  geom_hline(yintercept = 1000, color="#c31208") +
+  facet_wrap(~TP_ESCOLA) +
+  theme_bw() +
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()) +
+  labs(
+    title = "Boxplot Matemática - 2022",
+     subtitle = paste0("Comparação entre escolas públicas e privadas - linha pontilhada azul = mediana: ",mediana_mat),
+    caption = "Fonte: Microdados Inep / Elaboração: Fábio Rocha",
+    fill = "",
+    x="",
+    y="") +
+  scale_y_continuous(breaks = scales::breaks_extended(n = 10)(c(0, 1000, mediana_mat
+                                                                )))
+
+```
+
+# Construção da tabela médias
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=6}
+
+medias_2023 = enem_2023 %>%
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>%
+  filter(TP_ESCOLA %in% c("Pública","Privada")) %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels = c("Pública", "Privada"))) %>% 
+  group_by(TP_ESCOLA, SG_UF_PROVA) %>% 
+  summarise(media_redac_2023 = round(mean(NU_NOTA_REDACAO, na.rm = TRUE),2),
+            media_comp_1_2023 = round(mean(NU_NOTA_COMP1, na.rm = TRUE),2),
+            media_comp_2_2023 = round(mean(NU_NOTA_COMP2, na.rm = TRUE),2),
+            media_comp_3_2023 = round(mean(NU_NOTA_COMP3, na.rm = TRUE),2),
+            media_comp_4_2023 = round(mean(NU_NOTA_COMP4, na.rm = TRUE),2),
+            media_comp_5_2023 = round(mean(NU_NOTA_COMP5, na.rm = TRUE),2),
+            media_cn_2023 = round(mean(NU_NOTA_CN, na.rm = TRUE),2),
+            media_ch_2023 = round(mean(NU_NOTA_CH, na.rm = TRUE),2),
+            media_lp_2023 = round(mean(NU_NOTA_LC, na.rm = TRUE),2),
+            media_mt_2023 = round(mean(NU_NOTA_MT, na.rm = TRUE),2),
+            inscritos_2023 = n())
+
+medias_2022 = enem_2022 %>%
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>%
+  filter(TP_ESCOLA %in% c("Pública","Privada")) %>% 
+  group_by(TP_ESCOLA, SG_UF_PROVA) %>% 
+  summarise(media_redac_2022 = round(mean(NU_NOTA_REDACAO, na.rm = TRUE),2),
+            media_comp_1_2022 = round(mean(NU_NOTA_COMP1, na.rm = TRUE),2),
+            media_comp_2_2022 = round(mean(NU_NOTA_COMP2, na.rm = TRUE),2),
+            media_comp_3_2022 = round(mean(NU_NOTA_COMP3, na.rm = TRUE),2),
+            media_comp_4_2022 = round(mean(NU_NOTA_COMP4, na.rm = TRUE),2),
+            media_comp_5_2022 = round(mean(NU_NOTA_COMP5, na.rm = TRUE),2),
+            media_cn_2022 = round(mean(NU_NOTA_CN, na.rm = TRUE),2),
+            media_ch_2022 = round(mean(NU_NOTA_CH, na.rm = TRUE),2),
+            media_lp_2022 = round(mean(NU_NOTA_LC, na.rm = TRUE),2),
+            media_mt_2022 = round(mean(NU_NOTA_MT, na.rm = TRUE),2),
+            inscritos_2022 = n())
+
+medias_2022_2023 = medias_2023 %>% 
+  left_join(medias_2022, by = c("SG_UF_PROVA", "TP_ESCOLA"))
+
+medias_2022_2023_mapa <- mapa_estados %>%
+left_join(medias_2022_2023, by = c("abbrev_state" = "SG_UF_PROVA"))
+
+
+redac_23 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_redac_2023), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_redac_2023, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+  scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em redação - 2023",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem - INEP | Elaboração: Instituto Unibanco",
+    fill = "")
+
+redac_22 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_redac_2022), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_redac_2022, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+   scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em redação - 2022",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem - INEP | Elaboração: Instituto Unibanco",
+    fill = "")
+
+grid.arrange(redac_22, redac_23, 
+             ncol=2)
+
+# Gráficos de barra
+# Transformação dos dados para formato longo
+medias_long <- medias_2022_2023_mapa %>%
+  pivot_longer(cols = c(media_redac_2022, media_redac_2023),
+               names_to = "Ano",
+               values_to = "Média") %>%
+  mutate(Ano = ifelse(Ano == "media_redac_2022", "2022", "2023"))
+
+# Gráfico de barras horizontais
+redac_22 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_redac_2022), 
+                                              y = media_redac_2022)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2022
+  geom_text(aes(label = round(media_redac_2022, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,1000)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média de Redação - 2022",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2022'",
+    caption = "Fonte: Microdados Enem - INEP | Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Gráfico de 2023
+redac_23 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_redac_2023), 
+                                              y = media_redac_2023)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2023
+  geom_text(aes(label = round(media_redac_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +
+  ylim(0,1000)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média de Redação - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: INEP / Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Exibir lado a lado
+grid.arrange(redac_22, redac_23, ncol = 2)
+
+
+# Criar variável de variação percentual
+medias_2022_2023_mapa <- medias_2022_2023_mapa %>%
+  mutate(variacao_redacao = (media_redac_2023 - media_redac_2022))
+
+# Gráfico da variação entre 2022 e 2023
+medias_2022_2023_mapa %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels = c("Pública", "Privada"))) %>% 
+  ggplot(aes(x = reorder(abbrev_state, variacao_redacao), 
+                               y = variacao_redacao)) +
+  geom_col(aes(fill = variacao_redacao >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(variacao_redacao, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(-10,40)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Variação da média de redação (2022-2023)",
+    subtitle = "Concluintes do ensino médio em 2022 e 2023",
+    caption = "Fonte: Microdados Enem - INEP | Elaboração: Instituto Unibanco",
+    y = "Variação na Média da Redação"
+  )
+
+```
+
+# Matemática
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+
+medias_2022_2023_mapa = medias_2022_2023_mapa %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels=c("Pública", "Privada")))
+
+mat_23 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_mt_2023), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_mt_2023, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+  scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em matemática - 2023",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "")
+
+mat_22 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_mt_2022), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_mt_2022, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+   scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em matemática - 2022",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "")
+
+grid.arrange(mat_22, mat_23, 
+             ncol=2)
+
+
+# Gráfico de barras horizontais
+mat_22 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_mt_2022), 
+                                              y = media_mt_2022)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2022
+  geom_text(aes(label = round(media_mt_2022, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,800)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média em matemática - 2022",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2022'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Gráfico de 2023
+mat_23 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_mt_2023), 
+                                              y = media_mt_2023)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2023
+  geom_text(aes(label = round(media_mt_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +
+  ylim(0,800)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média em matemática - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Exibir lado a lado
+grid.arrange(mat_22, mat_23, ncol = 2)
+
+
+# Criar variável de variação percentual
+medias_2022_2023_mapa <- medias_2022_2023_mapa %>%
+  mutate(variacao_mat = (media_mt_2023 - media_mt_2022))
+
+# Gráfico da variação entre 2022 e 2023
+ggplot(medias_2022_2023_mapa, 
+                           aes(x = reorder(abbrev_state, variacao_mat), 
+                               y = variacao_mat)) +
+  geom_col(aes(fill = variacao_mat >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(variacao_mat, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(-30,30)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Variação da média em matemática (2022-2023)",
+    subtitle = "Concluintes do ensino médio em 2022 e 2023",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = "Variação na Média"
+  )
+
+```
+
+# Boxplot - Lingua Portuguesa
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+
+mediana_lp = median(enem_2023$NU_NOTA_LC, na.rm=TRUE)
+mediana_lp_2022 = median(enem_2022$NU_NOTA_LC, na.rm=TRUE)
+
+enem_2023 %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels=c("Pública", "Privada"))) %>% 
+  drop_na(NU_NOTA_LC) %>% 
+  ggplot(aes(x = reorder(SG_UF_PROVA, NU_NOTA_LC, FUN=median))) +
+  geom_boxplot(aes(y=NU_NOTA_LC), fill = "#e79786", 
+               color = "black", 
+               outlier.color = "green3", 
+               outlier.shape = 16) +
+  geom_hline(yintercept = mediana_lp, linetype = "dashed", color="blue", size=1) +
+  facet_wrap(~TP_ESCOLA) +
+  theme_bw() +
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()) +
+  labs(
+    title = "Boxplot em linguagens e códigos - 2023",
+     subtitle = paste0("Comparação entre escolas públicas e privadas - linha pontilhada azul = mediana: ",mediana_lp),
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "",
+    x="",
+    y="") +
+  scale_y_continuous(breaks = scales::breaks_extended(n = 10)(c(0, 1000, mediana_lp)))
+
+
+enem_2022 %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  drop_na(NU_NOTA_LC) %>% 
+  ggplot(aes(x = reorder(SG_UF_PROVA, NU_NOTA_LC, FUN=median))) +
+  geom_boxplot(aes(y=NU_NOTA_LC), fill = "#e79786", 
+               color = "black", 
+               outlier.color = "green3", 
+               outlier.shape = 16) +
+  geom_hline(yintercept = mediana_lp_2022, linetype = "dashed", color="blue", size=1) +
+  facet_wrap(~TP_ESCOLA) +
+  theme_bw() +
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()) +
+  labs(
+    title = "Boxplot em linguagens e códigos - 2022",
+    subtitle = paste0("Comparação entre escolas públicas e privadas - linha pontilhada azul = mediana: ",mediana_lp_2022),
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "",
+    x="",
+    y="") +
+  scale_y_continuous(breaks = scales::breaks_extended(n = 10)(c(0, 1000, mediana_lp_2022)))
+
+```
+
+# Lingua portuguesa
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+
+lp_23 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_lp_2023), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_lp_2023, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+  scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em Lingua Portuguesa - 2023",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "")
+
+lp_22 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_mt_2022), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_mt_2022, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+   scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em Lingua Portuguesa - 2022",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "")
+
+grid.arrange(lp_22, lp_23, 
+             ncol=2)
+
+# Gráfico de barras horizontais
+lp_22 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_lp_2022), 
+                                              y = media_lp_2022)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2022
+  geom_text(aes(label = round(media_lp_2022, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,800)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média em Lingua Portuguesa - 2022",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2022'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Gráfico de 2023
+lp_23 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_lp_2023), 
+                                              y = media_lp_2023)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2023
+  geom_text(aes(label = round(media_lp_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +
+  ylim(0,800)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média em Lingua Portuguesa - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Exibir lado a lado
+grid.arrange(lp_22, lp_23, ncol = 2)
+
+
+# Criar variável de variação percentual
+medias_2022_2023_mapa <- medias_2022_2023_mapa %>%
+  mutate(variacao_lp = (media_lp_2023 - media_lp_2022))
+
+# Gráfico da variação entre 2022 e 2023
+ggplot(medias_2022_2023_mapa, 
+                           aes(x = reorder(abbrev_state, variacao_lp), 
+                               y = variacao_lp)) +
+  geom_col(aes(fill = variacao_lp >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(variacao_lp, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(-10,15)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Variação da média em língua portuguesa (2022-2023)",
+    subtitle = "Concluintes do ensino médio em 2022 e 2023",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = "Variação na média"
+  )
+
+```
+
+# Boxplot - Ciências da Natureza
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+
+mediana_cn = median(enem_2023$NU_NOTA_CN, na.rm=TRUE)
+mediana_cn_2022 = median(enem_2022$NU_NOTA_CN, na.rm=TRUE)
+
+enem_2023 %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels=c("Pública", "Privada"))) %>% 
+  drop_na(NU_NOTA_CN) %>% 
+  ggplot(aes(x = reorder(SG_UF_PROVA, NU_NOTA_CN, FUN=median))) +
+  geom_boxplot(aes(y=NU_NOTA_CN), fill = "#e79786", 
+               color = "black", 
+               outlier.color = "green3", 
+               outlier.shape = 16) +
+  geom_hline(yintercept = mediana_lp, linetype = "dashed", color="blue", size=1) +
+  facet_wrap(~TP_ESCOLA) +
+  theme_bw() +
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()) +
+  labs(
+    title = "Boxplot ciências da natureza - 2023",
+     subtitle = paste0("Comparação entre escolas públicas e privadas - linha pontilhada azul = mediana: ",mediana_cn),
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "",
+    x="",
+    y="") +
+  scale_y_continuous(breaks = scales::breaks_extended(n = 10)(c(0, 1000, mediana_cn)))
+
+
+enem_2022 %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  drop_na(NU_NOTA_LC) %>% 
+  ggplot(aes(x = reorder(SG_UF_PROVA, NU_NOTA_LC, FUN=median))) +
+  geom_boxplot(aes(y=NU_NOTA_LC), fill = "#e79786", 
+               color = "black", 
+               outlier.color = "green3", 
+               outlier.shape = 16) +
+  geom_hline(yintercept = mediana_lp_2022, linetype = "dashed", color="blue", size=1) +
+  facet_wrap(~TP_ESCOLA) +
+  theme_bw() +
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()) +
+  labs(
+      title = "Boxplot ciências da natureza - 2022",
+    subtitle = paste0("Comparação entre escolas públicas e privadas - linha pontilhada azul = mediana: ",mediana_cn_2022),
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "",
+    x="",
+    y="") +
+  scale_y_continuous(breaks = scales::breaks_extended(n = 10)(c(0, 1000, mediana_cn_2022)))
+
+```
+
+# Ciencias da Natureza
+ 
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5.5}
+
+cn_23 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_cn_2023), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_cn_2023, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+  scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em ciências da natureza - 2023",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "")
+
+cn_22 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_cn_2022), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_cn_2022, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+   scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em ciências da natureza - 2022",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "")
+
+grid.arrange(cn_22, cn_23, 
+             ncol=2)
+
+
+# Gráfico de barras horizontais
+cn_22 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_cn_2022), 
+                                              y = media_cn_2022)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2022
+  geom_text(aes(label = round(media_cn_2022, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,800)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média em ciências da natureza - 2022",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2022'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Gráfico de 2023
+cn_23 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_cn_2023), 
+                                              y = media_cn_2023)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2023
+  geom_text(aes(label = round(media_cn_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +
+  ylim(0,800)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média em ciências da natureza - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Exibir lado a lado
+grid.arrange(cn_22, cn_23, ncol = 2)
+
+
+# Criar variável de variação percentual
+medias_2022_2023_mapa <- medias_2022_2023_mapa %>%
+  mutate(variacao_cn = (media_cn_2023 - media_cn_2022))
+
+# Gráfico da variação entre 2022 e 2023
+ggplot(medias_2022_2023_mapa, 
+                           aes(x = reorder(abbrev_state, variacao_cn), 
+                               y = variacao_cn)) +
+  geom_col(aes(fill = variacao_cn >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(variacao_cn, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(-20,25)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Variação da média em ciências da natureza (2022-2023)",
+     subtitle = "Concluintes do ensino médio em 2022 e 2023",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = "Variação na média"
+  )
+
+```
+
+# Boxplot - Ciências Humanas
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+
+mediana_ch = median(enem_2023$NU_NOTA_CH, na.rm=TRUE)
+mediana_ch_2022 = median(enem_2022$NU_NOTA_CH, na.rm=TRUE)
+
+enem_2023 %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels=c("Pública", "Privada"))) %>% 
+  drop_na(NU_NOTA_CH) %>% 
+  ggplot(aes(x = reorder(SG_UF_PROVA, NU_NOTA_CH, FUN=median))) +
+  geom_boxplot(aes(y=NU_NOTA_CH), fill = "#e79786", 
+               color = "black", 
+               outlier.color = "green3", 
+               outlier.shape = 16) +
+  geom_hline(yintercept = mediana_lp, linetype = "dashed", color="blue", size=1) +
+  facet_wrap(~TP_ESCOLA) +
+  theme_bw() +
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()) +
+  labs(
+    title = "Boxplot ciências humanas - 2023",
+     subtitle = paste0("Comparação entre escolas públicas e privadas - linha pontilhada azul = mediana: ",mediana_ch),
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "",
+    x="",
+    y="") +
+  scale_y_continuous(breaks = scales::breaks_extended(n = 10)(c(0, 1000, mediana_ch)))
+
+
+enem_2022 %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  drop_na(NU_NOTA_LC) %>% 
+  ggplot(aes(x = reorder(SG_UF_PROVA, NU_NOTA_LC, FUN=median))) +
+  geom_boxplot(aes(y=NU_NOTA_LC), fill = "#e79786", 
+               color = "black", 
+               outlier.color = "green3", 
+               outlier.shape = 16) +
+  geom_hline(yintercept = mediana_lp_2022, linetype = "dashed", color="blue", size=1) +
+  facet_wrap(~TP_ESCOLA) +
+  theme_bw() +
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()) +
+  labs(
+      title = "Boxplot ciências humanas - 2022",
+    subtitle = paste0("Comparação entre escolas públicas e privadas - linha pontilhada azul = mediana: ",mediana_ch_2022),
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "",
+    x="",
+    y="") +
+  scale_y_continuous(breaks = scales::breaks_extended(n = 10)(c(0, 1000, mediana_ch_2022)))
+
+```
+
+# Ciencias Humanas 
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5.5}
+
+ch_23 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_ch_2023), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_ch_2023, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+  scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em ciências humanas - 2023",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "")
+
+ch_22 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_ch_2022), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_ch_2022, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+   scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em Ciências Humanas - 2022",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "")
+
+grid.arrange(ch_22, ch_23, 
+             ncol=2)
+
+# Gráfico de barras horizontais
+ch_22 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_ch_2022), 
+                                              y = media_ch_2022)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2022
+  geom_text(aes(label = round(media_ch_2022, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,800)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média em ciências humanas - 2022",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2022'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Gráfico de 2023
+ch_23 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_ch_2023), 
+                                              y = media_ch_2023)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2023
+  geom_text(aes(label = round(media_ch_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +
+  ylim(0,800)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média em ciências humanas - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Exibir lado a lado
+grid.arrange(ch_22, ch_23, ncol = 2)
+
+
+# Criar variável de variação percentual
+medias_2022_2023_mapa <- medias_2022_2023_mapa %>%
+  mutate(variacao_ch = (media_ch_2023 - media_ch_2022))
+
+# Gráfico da variação entre 2022 e 2023
+ggplot(medias_2022_2023_mapa, 
+                           aes(x = reorder(abbrev_state, variacao_ch), 
+                               y = variacao_ch)) +
+  geom_col(aes(fill = variacao_ch >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(variacao_ch, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(-20,25)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Variação da média em ciências humanas (2022-2023)",
+     subtitle = "Concluintes do ensino médio em 2022 e 2023",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = "Variação na média"
+  )
+
+```
+
+# Boxplot - Redação
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5.5}
+
+mediana_redac = median(enem_2023$NU_NOTA_REDACAO, na.rm=TRUE)
+media_redac = mean(enem_2023$NU_NOTA_REDACAO, na.rm=TRUE)
+
+enem_2023 %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels=c("Pública", "Privada"))) %>% 
+  drop_na(NU_NOTA_REDACAO) %>% 
+  ggplot(aes(x = reorder(SG_UF_PROVA, NU_NOTA_REDACAO, FUN=median))) +
+  geom_boxplot(aes(y=NU_NOTA_REDACAO), fill = "#e79786", 
+               color = "black", 
+               outlier.color = "green3", 
+               outlier.shape = 16) +
+  geom_hline(yintercept = mediana_redac, linetype = "dashed", color="blue", size=1) +
+  geom_hline(yintercept = 1000, color="#c31208") +
+  facet_wrap(~TP_ESCOLA) +
+  theme_bw() +
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()) + # Remove o fundo cinza da legenda
+  labs(
+    title = "Boxplot redação - 2023",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "",
+    x="",
+    y="") +
+  scale_y_continuous(breaks = scales::breaks_extended(n = 10)(c(0, 1000, mediana_redac)))
+
+mediana_redac = median(enem_2022$NU_NOTA_REDACAO, na.rm=TRUE)
+media_redac = mean(enem_2022$NU_NOTA_REDACAO, na.rm=TRUE)
+
+enem_2022 %>% 
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>% 
+  filter(TP_ESCOLA != "Não respondeu") %>% 
+  drop_na(NU_NOTA_REDACAO) %>% 
+  ggplot(aes(x = reorder(SG_UF_PROVA, NU_NOTA_REDACAO, FUN=median))) +
+  geom_boxplot(aes(y=NU_NOTA_REDACAO), fill = "#e79786", 
+               color = "black", 
+               outlier.color = "green3", 
+               outlier.shape = 16) +
+  geom_hline(yintercept = mediana_redac, linetype = "dashed", color="blue", size=1) +
+  geom_hline(yintercept = 1000, color="#c31208") +
+  facet_wrap(~TP_ESCOLA) +
+  theme_bw() +
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()) + # Remove o fundo cinza da legenda
+  labs(
+    title = "Boxplot Redação - 2022",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    fill = "",
+    x="",
+    y="") +
+  scale_y_continuous(breaks = scales::breaks_extended(n = 10)(c(0, 1000, mediana_redac)))
+
+```
+
+# Construção da tabela médias
+
+# Competências JF
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+medias_2022_2023 %>%
+  filter(TP_ESCOLA == "Pública",
+         SG_UF_PROVA %in% c("PI", "CE", "GO", "RS", "MG", "ES")) %>%
+  select(SG_UF_PROVA, media_comp_1_2023, media_comp_2_2023, media_comp_3_2023, media_comp_4_2023, media_comp_5_2023) %>%
+  pivot_longer(cols = starts_with("media_comp"), names_to = "Competencia", values_to = "Media") %>%
+   mutate(Competencia = str_replace(Competencia, "media_comp_", "Competência ")) %>%
+  mutate(Competencia = str_replace(Competencia, "_2023", "")) %>% # Remove o sufixo 2023
+  ggplot(aes(x = reorder(Competencia, Media), y = Media, fill = Competencia)) +
+  geom_col(show.legend = FALSE) + # Remove a legenda
+  geom_text(aes(label = round(Media, 1)), size = 2.5) +
+  ylim(0, 200) + 
+  facet_wrap(~SG_UF_PROVA) + # Agora facetas por estado
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Médias das competências por estado (2023)",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+     caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = "")+
+ scale_fill_manual(values = c("Competência 2" = "#2171A2", "Competência 4" = "#6BAED6", "Competência 1" = "#9ECAE1", 
+                             "Competência 3" = "#C6DBEF", "Competência 5" = "#DEEBF7"))+
+
+  coord_flip()
+
+# Competências - Brasil
+medias_2023_competencias = enem_2023 %>%
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>%
+  filter(TP_ESCOLA %in% c("Pública","Privada")) %>% 
+  group_by(TP_ESCOLA) %>% 
+  summarise(
+            media_comp_1_2023 = round(mean(NU_NOTA_COMP1, na.rm = TRUE),2),
+            media_comp_2_2023 = round(mean(NU_NOTA_COMP2, na.rm = TRUE),2),
+            media_comp_3_2023 = round(mean(NU_NOTA_COMP3, na.rm = TRUE),2),
+            media_comp_4_2023 = round(mean(NU_NOTA_COMP4, na.rm = TRUE),2),
+            media_comp_5_2023 = round(mean(NU_NOTA_COMP5, na.rm = TRUE),2))
+
+
+medias_2023_competencias %>%
+  filter(TP_ESCOLA == "Pública") %>%
+  select(media_comp_1_2023, media_comp_2_2023, media_comp_3_2023, media_comp_4_2023, media_comp_5_2023) %>%
+  pivot_longer(cols = starts_with("media_comp"), names_to = "Competencia", values_to = "Media") %>%
+   mutate(Competencia = str_replace(Competencia, "media_comp_", "Competência ")) %>%
+  mutate(Competencia = str_replace(Competencia, "_2023", "")) %>% # Remove o sufixo 2023
+  ggplot(aes(x = reorder(Competencia, Media), y = Media, fill = Competencia)) +
+  geom_col(show.legend = FALSE) + # Remove a legenda
+  geom_text(aes(label = round(Media, 1)), size = 2.5) +
+  ylim(0, 200) + 
+  #facet_wrap(~SG_UF_PROVA) + # Agora facetas por estado
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Médias das competências - Brasil (2023)",
+    subtitle = "Concluintes (pública) - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = "")+
+ scale_fill_manual(values = c("Competência 2" = "#2171A2", "Competência 4" = "#6BAED6", "Competência 1" = "#9ECAE1", 
+                             "Competência 3" = "#C6DBEF", "Competência 5" = "#DEEBF7"))+
+
+  coord_flip()
+
+
+```
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5.5}
+
+medias_2023 = enem_2023 %>%
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>%
+  filter(TP_ESCOLA %in% c("Pública","Privada")) %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels = c("Pública", "Privada"))) %>% 
+  group_by(TP_ESCOLA, SG_UF_PROVA) %>% 
+  summarise(media_redac_2023 = round(mean(NU_NOTA_REDACAO, na.rm = TRUE),2),
+            media_comp_1_2023 = round(mean(NU_NOTA_COMP1, na.rm = TRUE),2),
+            media_comp_2_2023 = round(mean(NU_NOTA_COMP2, na.rm = TRUE),2),
+            media_comp_3_2023 = round(mean(NU_NOTA_COMP3, na.rm = TRUE),2),
+            media_comp_4_2023 = round(mean(NU_NOTA_COMP4, na.rm = TRUE),2),
+            media_comp_5_2023 = round(mean(NU_NOTA_COMP5, na.rm = TRUE),2),
+            media_cn_2023 = round(mean(NU_NOTA_CN, na.rm = TRUE),2),
+            media_ch_2023 = round(mean(NU_NOTA_CH, na.rm = TRUE),2),
+            media_lp_2023 = round(mean(NU_NOTA_LC, na.rm = TRUE),2),
+            media_mt_2023 = round(mean(NU_NOTA_MT, na.rm = TRUE),2),
+            inscritos_2023 = n())
+
+medias_2022 = enem_2022 %>%
+  mutate(TP_ESCOLA = recode(TP_ESCOLA,
+                            `1` = "Não respondeu",
+                            `2` = "Pública",
+                            `3` = "Privada")) %>%
+  filter(TP_ESCOLA %in% c("Pública","Privada")) %>% 
+  group_by(TP_ESCOLA, SG_UF_PROVA) %>% 
+  summarise(media_redac_2022 = round(mean(NU_NOTA_REDACAO, na.rm = TRUE),2),
+            media_comp_1_2022 = round(mean(NU_NOTA_COMP1, na.rm = TRUE),2),
+            media_comp_2_2022 = round(mean(NU_NOTA_COMP2, na.rm = TRUE),2),
+            media_comp_3_2022 = round(mean(NU_NOTA_COMP3, na.rm = TRUE),2),
+            media_comp_4_2022 = round(mean(NU_NOTA_COMP4, na.rm = TRUE),2),
+            media_comp_5_2022 = round(mean(NU_NOTA_COMP5, na.rm = TRUE),2),
+            media_cn_2022 = round(mean(NU_NOTA_CN, na.rm = TRUE),2),
+            media_ch_2022 = round(mean(NU_NOTA_CH, na.rm = TRUE),2),
+            media_lp_2022 = round(mean(NU_NOTA_LC, na.rm = TRUE),2),
+            media_mt_2022 = round(mean(NU_NOTA_MT, na.rm = TRUE),2),
+            inscritos_2022 = n())
+
+medias_2022_2023 = medias_2023 %>% 
+  left_join(medias_2022, by = c("SG_UF_PROVA", "TP_ESCOLA"))
+
+medias_2022_2023_mapa <- mapa_estados %>%
+left_join(medias_2022_2023, by = c("abbrev_state" = "SG_UF_PROVA"))
+
+
+redac_23 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_redac_2023), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_redac_2023, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+  scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em redação - 2023",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) | Elaboração: Instituto Unibanco",
+    fill = "")
+
+redac_22 = ggplot(medias_2022_2023_mapa) +
+  geom_sf(aes(fill = media_redac_2022), color = "#efbaae", size = 0.1) +
+  geom_sf_text(aes(label = round(media_redac_2022, 1)), size = 2, color = "black", vjust = 1, hjust = -0.2) + # Rótulos no mapa
+   scale_fill_gradientn(guide = guide_colorbar(
+    barwidth = 10,  
+    barheight = 0.5  ),
+    colors = c("#ffffff", "#f7dcd7", "#efbaae", "#e79786", "#df745e", "#8e2c00")) +
+  theme_bw(base_family = "ubuntu") +
+  facet_wrap(~TP_ESCOLA) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid = element_blank(),
+    legend.background = element_blank()  # Remove o fundo cinza da legenda
+  ) +
+  labs(
+    title = "Média em redação - 2022",
+    subtitle = "Comparação entre escolas públicas e privadas",
+    caption = "Fonte: Microdados Enem (Inep) | Elaboração: Instituto Unibanco",
+    fill = "")
+
+grid.arrange(redac_22, redac_23, 
+             ncol=2)
+
+# Gráficos de barra
+# Transformação dos dados para formato longo
+medias_long <- medias_2022_2023_mapa %>%
+  pivot_longer(cols = c(media_redac_2022, media_redac_2023),
+               names_to = "Ano",
+               values_to = "Média") %>%
+  mutate(Ano = ifelse(Ano == "media_redac_2022", "2022", "2023"))
+
+# Gráfico de barras horizontais
+redac_22 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_redac_2022), 
+                                              y = media_redac_2022)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2022
+  geom_text(aes(label = round(media_redac_2022, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,1000)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média de redação - 2022",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2022'",
+    caption = "Fonte: Microdados Enem (Inep) | Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Gráfico de 2023
+redac_23 <- ggplot(medias_2022_2023_mapa, aes(x = reorder(abbrev_state, media_redac_2023), 
+                                              y = media_redac_2023)) +
+  geom_col(fill = "#2171A2") +  # Cor para 2023
+  geom_text(aes(label = round(media_redac_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +
+  ylim(0,1000)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 13),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Média de Redação - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) | Elaboração: Instituto Unibanco",
+    y = ""
+  )
+
+# Exibir lado a lado
+grid.arrange(redac_22, redac_23, ncol = 2)
+
+
+# Criar variável de variação percentual
+medias_2022_2023_mapa <- medias_2022_2023_mapa %>%
+  mutate(variacao_redacao = (media_redac_2023 - media_redac_2022))
+
+# Gráfico da variação entre 2022 e 2023
+medias_2022_2023_mapa %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels = c("Pública", "Privada"))) %>% 
+  ggplot(aes(x = reorder(abbrev_state, variacao_redacao), 
+                               y = variacao_redacao)) +
+  geom_col(aes(fill = variacao_redacao >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(variacao_redacao, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(-10,40)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Variação da média de redação (2022-2023)",
+    subtitle = "Concluintes do ensino médio em 2022 e 2023",
+    caption = "Fonte: Microdados Enem (Inep) | Elaboração: Instituto Unibanco",
+    y = "Variação na média"
+  )
+
+```
+
+# Competência 1
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+# Grafico de barras
+medias_2022_2023_mapa %>% 
+mutate(TP_ESCOLA = factor(TP_ESCOLA, levels=c("Pública", "Privada"))) %>% 
+  ggplot(aes(x = reorder(abbrev_state, media_comp_1_2023), y = media_comp_1_2023)) +
+  geom_col(aes(fill = media_comp_1_2023 >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(media_comp_1_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,200)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Competência 1 - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) | Elaboração: Instituto Unibanco",
+    y = "Média")
+
+```
+
+# Competência 2
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+# Grafico de barras
+medias_2022_2023_mapa %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels=c("Pública", "Privada"))) %>% 
+  ggplot(aes(x = reorder(abbrev_state, media_comp_2_2023), y = media_comp_2_2023)) +
+  geom_col(aes(fill = media_comp_2_2023 >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(media_comp_2_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,200)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Competência 2 - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = "Média")
+
+```
+
+# Competência 3
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+# Grafico de barras
+medias_2022_2023_mapa %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels=c("Pública", "Privada"))) %>% 
+  ggplot(aes(x = reorder(abbrev_state, media_comp_3_2023), y = media_comp_3_2023)) +
+  geom_col(aes(fill = media_comp_3_2023 >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(media_comp_3_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,200)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Competência 3 - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = "Média")
+
+
+```
+
+# Competência 4
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+# Grafico de barras
+medias_2022_2023_mapa %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels=c("Pública", "Privada"))) %>% 
+  ggplot(aes(x = reorder(abbrev_state, media_comp_4_2023), y = media_comp_4_2023)) +
+  geom_col(aes(fill = media_comp_4_2023 >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(media_comp_4_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,200)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Competência 4 - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = "Média")
+
+```
+
+# Competência 5
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+# Grafico de barras
+medias_2022_2023_mapa %>% 
+  mutate(TP_ESCOLA = factor(TP_ESCOLA, levels=c("Pública", "Privada"))) %>% 
+  ggplot(aes(x = reorder(abbrev_state, media_comp_5_2023), y = media_comp_5_2023)) +
+  geom_col(aes(fill = media_comp_5_2023 >= 0), show.legend = FALSE) +  # Define cores baseadas no sinal da variação
+  scale_fill_manual(values = c("TRUE" = "#2171A2", "FALSE" = "red")) +  # Azul para crescimento, vermelho para queda
+  geom_text(aes(label = round(media_comp_5_2023, 1)), 
+            hjust = -0.2, size = 3, color = "black") +  
+  coord_flip() +  
+  ylim(0,200)+
+  facet_wrap(~TP_ESCOLA, scales = "free_y") +  
+  theme_bw(base_family = "ubuntu") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 20),
+    plot.subtitle = element_text(face = "italic", size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 10),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(t = 20, r = 8, b = 7, l = 5),
+    panel.grid.major.y = element_blank(),
+    legend.background = element_blank()
+  ) +
+  labs(
+    title = "Competência 5 - 2023",
+    subtitle = "Concluintes - 'Estou cursando e concluirei o ensino médio em 2023'",
+    caption = "Fonte: Microdados Enem (Inep) / Elaboração: Instituto Unibanco",
+    y = "Média")
+
+```
+
+
+
